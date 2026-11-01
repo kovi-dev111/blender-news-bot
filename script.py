@@ -192,6 +192,10 @@ def send_text_to_telegram(text):
 
 # ===== ГЛАВНОЕ =====
 def main():
+    
+    if not os.path.exists(STATE_FILE):
+        save_posted([])
+    
     now_utc, now_utc5 = get_time_info()
     print("=" * 50)
     print(f"🕐 Время: UTC {now_utc.strftime('%H:%M')} / UTC+5 {now_utc5.strftime('%H:%M')}")
