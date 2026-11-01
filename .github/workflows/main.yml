@@ -16,9 +16,7 @@ jobs:
           python-version: '3.10'
       
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install feedparser requests huggingface_hub
+        run: python -m pip install --upgrade pip && pip install feedparser requests huggingface_hub
       
       - name: Run news collector
         run: python script.py
@@ -28,11 +26,5 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
       
-      - name: Save posted.json state
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          if [ ! -f posted.json ]; then echo "[]" > posted.json; fi
-          git add posted.json
-          git diff --staged --quiet || git commit -m "Update posted state"
-          git push || echo "Nothing to push"
+      - name: Save state
+        run: python -c "import os; os.system('git config --global user.name github-actions-bot'); os.system('git config --global user.email actions@github.com'); os.system('git add posted.json'); os.system('git diff --staged --quiet || git commit -m update'); os.system('git push')"
