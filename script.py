@@ -15,7 +15,7 @@ UNSPLASH_ACCESS_KEY = os.environ.get('UNSPLASH_ACCESS_KEY', '')
 
 # Инициализируем клиент Hugging Face с лучшей моделью для русского языка
 client = InferenceClient(token=HF_API_KEY)
-MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
+MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.2"
 
 FEEDS = [
     "https://80.lv/rss/",
