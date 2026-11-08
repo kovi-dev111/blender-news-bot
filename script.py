@@ -15,8 +15,7 @@ UNSPLASH_ACCESS_KEY = os.environ.get('UNSPLASH_ACCESS_KEY', '')
 
 # Инициализируем клиент Hugging Face с лучшей моделью для русского языка
 client = InferenceClient(token=HF_API_KEY)
-MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.2"
-
+MODEL_NAME = "HuggingFaceH4/zephyr-7b-beta"
 FEEDS = [
     "https://80.lv/rss/",
     "https://www.blendernation.com/feed/",
@@ -114,41 +113,52 @@ def extract_links_from_content(content):
 # ===== AI (HUGGING FACE) =====
 def check_with_ai(title, description, all_links, has_image):
     links_text = "\n".join(all_links[:3]) if all_links else "Нет"
-    image_instruction = "\n\nВАЖНО: У новости НЕТ изображения. В самом конце поста добавь отдельной строкой: NO_IMAGE_FOUND" if not has_image else ""
+    image_instruction = "\nВАЖНО: У новости НЕТ изображения. В самом конце поста добавь отдельной строкой: NO_IMAGE_FOUND" if not has_image else ""
     
-    prompt = f"""Ты редактор Telegram-канала о Blender. Анализируй новость на английском и пиши ответ ТОЛЬКО на русском.
-
+    # Промпт специально под формат Zephyr
+    prompt = f"""<|system|>
+Ты редактор Telegram-канала о Blender. Отвечай ТОЛЬКО на русском языке.
+Если новость НЕ про Blender (3D, рендер, аддоны), ответь ровно одним словом: IGNORE
+<|user|>
 Заголовок: {title}
-Текст: {description[:1200]}
-Ссылки: {links_text}{image_instruction}
+Текст: {description[:1000]}
+Ссылки: {links_text}
+{image_instruction}
 
-ПРАВИЛА:
-1. Если новость НЕ про Blender (3D, рендер, аддоны) — напиши ТОЛЬКО слово: IGNORE
-2. Если про Blender, создай пост СТРОГО по этому шаблону:
-
-[Краткий заголовок на русском, 1-2 строки]
+Создай пост СТРОГО по этому шаблону:
+[Краткий заголовок на русском]
 
 [Суть новости: 2-3 предложения, без воды]
 
-🔗 [Название ресурса 1] — [ссылка 1]
-🔗 [Название ресурса 2] — [ссылка 2]
+🔗 [Название ресурса] — [ссылка]
+🔗 [Название ресурса 2] — [ссылка]
 
-Требования к посту:
-- Максимум 800 символов.
-- Не используй жирный шрифт (звездочки).
-- Ссылки должны быть полными (https://...).
-- Если ссылка одна, оставь только одну строку со ссылкой.
-
-Пример идеального поста:
-Blender опубликовала годовой отчёт за 2025 год
-
-Фонд отчитался о тратах и планах на будущее. Сообщество получило доступ к новым материалам.
-
-🔗 Читать отчёт — https://example.com/report
-🔗 Обсуждение — https://example.com/discussion
-
-Начинай ответ:"""
-
+Правила: макс. 800 символов, без жирного шрифта (*), ссылки полные.
+<|assistant|>
+"""
+    
+    for attempt in range(2):
+        try:
+            # Используем chat_completion, он стабильнее для Zephyr
+            response = client.chat_completion(
+                model="HuggingFaceH4/zephyr-7b-beta",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=400,
+                temperature=0.3
+            )
+            text = response.choices[0].message.content.strip()
+            
+            # Чистим ответ от возможных кавычек
+            if text.startswith('"') and text.endswith('"'):
+                text = text[1:-1]
+            return text
+            
+        except Exception as e:
+            print(f"  HF Attempt {attempt+1} error: {e}")
+            if attempt == 0:
+                print("  Жду 5 секунд (сервер HF просыпается)...")
+                time.sleep(5)
+    return "IGNORE"
     # Попытка запроса с защитой от "холодного старта" серверов HF
     for attempt in range(2):
         try:
