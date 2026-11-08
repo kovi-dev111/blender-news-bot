@@ -11,16 +11,21 @@ from deep_translator import GoogleTranslator, MyMemoryTranslator
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-# Ключевые слова для фильтрации (в нижнем регистре)
-KEYWORDS = ['blender', 'cycles', 'eevee', 'geometry nodes', 'bpy', 'blender foundation']
-
+# Больше источников
 FEEDS = [
     "https://80.lv/rss/",
     "https://www.blendernation.com/feed/",
     "https://blenderartists.org/latest.rss",
-    "https://devtalk.blender.org/c/news/weekly-updates/10.rss"
+    "https://devtalk.blender.org/c/news/weekly-updates/10.rss",
+    "https://www.blender.org/rss.xml",  # Официальный блог Blender
 ]
 
+# Расширенные ключевые слова
+KEYWORDS = [
+    'blender', 'cycles', 'eevee', 'geometry nodes', 'bpy', 
+    'blender foundation', '3d modeling', '3d render', 'vfx',
+    'procedural', 'shader', 'addon', 'plug-in'
+]
 STATE_FILE = "posted.json"
 
 def is_working_hours():
@@ -125,27 +130,33 @@ def main():
                 continue
 
             # === ПРОВЕРКА ДАТЫ (не старше 24 часов) ===
-            published_time = None
-            if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                published_time = datetime(*entry.published_parsed[:6])
-            elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                published_time = datetime(*entry.updated_parsed[:6])
-            
-            if published_time:
-                age = datetime.utcnow() - published_time
-                if age.total_seconds() > 86400: # 86400 секунд = 24 часа
-                    print(f"⏭️ Пропуск (старше 1 дня): {entry.get('title', '')[:40]}")
-                    continue
+published_time = None
+if hasattr(entry, 'published_parsed') and entry.published_parsed:
+    try:
+        published_time = datetime(*entry.published_parsed[:6])
+    except:
+        pass
+elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+    try:
+        published_time = datetime(*entry.updated_parsed[:6])
+    except:
+        pass
 
-            title = entry.get('title', 'Без заголовка')
-            description = ""
-            if hasattr(entry, 'summary'): description += entry.summary
-            if hasattr(entry, 'description'): description += entry.description
+# Если дата не распарсилась — считаем новость свежей (пропускаем проверку)
+if published_time:
+    age = datetime.utcnow() - published_time
+    if age.total_seconds() > 86400:  # 24 часа
+        print(f"⏭️ Пропуск (старше 1 дня): {entry.get('title', '')[:40]}")
+        continue
+else:
+    print(f"⚠️ Дата не найдена, считаем свежей: {entry.get('title', '')[:40]}")
             
             # === ПРОВЕРКА НА BLENDER ===
-            if not is_blender_news(title, description):
-                print(f"⏭️ Пропуск (не Blender): {title[:40]}")
-                continue
+if not is_blender_news(title, description):
+    print(f"⏭️ Пропуск (нет ключевых слов): {title[:50]}")
+    print(f"   Заголовок: {title}")
+    print(f"   Описание: {description[:100]}...")
+    continue
 
             print(f"✅ Найдено свежее: {title[:50]}")
 
