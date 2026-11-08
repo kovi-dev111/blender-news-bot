@@ -6,11 +6,10 @@ import time
 import re
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator
 
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
-UNSPLASH_ACCESS_KEY = os.environ.get('UNSPLASH_ACCESS_KEY', '')
 
 # Ключевые слова для фильтрации (в нижнем регистре)
 KEYWORDS = ['blender', 'cycles', 'eevee', 'geometry nodes', 'bpy', 'blender foundation']
@@ -23,7 +22,6 @@ FEEDS = [
 ]
 
 STATE_FILE = "posted.json"
-translator = GoogleTranslator(source='auto', target='ru')
 
 def is_working_hours():
     now_utc = datetime.utcnow()
@@ -44,6 +42,27 @@ def save_posted(posted):
     with open(STATE_FILE, 'w', encoding='utf-8') as f:
         json.dump(posted, f, ensure_ascii=False, indent=2)
 
+def clean_html(text):
+    """Удаляет все HTML-теги, чтобы переводчик не ломался"""
+    clean = re.sub(r'<[^>]+>', ' ', text)
+    return re.sub(r'\s+', ' ', clean).strip()
+
+def translate_text(text):
+    """Переводит текст с запасным вариантом, если Google заблокирует"""
+    clean = clean_html(text)
+    if not clean or len(clean) < 10:
+        return clean
+    
+    try:
+        # Основной вариант: Google
+        return GoogleTranslator(source='auto', target='ru').translate(clean)
+    except Exception:
+        try:
+            # Запасной вариант: MyMemory (бесплатный, без ключей)
+            return MyMemoryTranslator(source='auto', target='ru').translate(clean)
+        except Exception:
+            return clean # Если всё сломалось, возвращаем оригинал
+
 def extract_image(entry):
     if hasattr(entry, 'media_content'):
         for m in entry.media_content:
@@ -59,32 +78,11 @@ def extract_image(entry):
     match = re.search(r'<img[^>]+src="([^"]+)"', content)
     return match.group(1) if match else None
 
-def extract_links(content):
-    links = re.findall(r'https?://[^\s<>"\')\]]+', content)
-    cleaned = []
-    for link in links:
-        link = re.sub(r'["\'\)\]>]+$', '', link)
-        domain = urlparse(link).netloc
-        if not any(x in domain for x in ['facebook', 'twitter', 'instagram', 'youtube.com/watch', 'imgur']):
-            if link not in cleaned: cleaned.append(link)
-    return cleaned
-
 def is_blender_news(title, description):
     text = (title + " " + description).lower()
-    # Если есть ключевые слова Blender
-    if any(kw in text for kw in KEYWORDS):
-        return True
-    return False
-
-def translate_text(text):
-    try:
-        # Переводим только первые 500 символов для скорости и стабильности
-        return translator.translate(text[:500])
-    except:
-        return text # Если переводчик заблокировал, оставляем как есть
+    return any(kw in text for kw in KEYWORDS)
 
 def send_to_telegram(image_url, text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     if image_url:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         try:
@@ -92,12 +90,14 @@ def send_to_telegram(image_url, text):
             if resp.status_code == 200:
                 files = {'photo': ('img.jpg', resp.content, 'image/jpeg')}
                 data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': text, 'parse_mode': 'HTML'}
-                return requests.post(url, files=files, data=data, timeout=15).status_code == 200
+                if requests.post(url, files=files, data=data, timeout=15).status_code == 200:
+                    return True
         except:
-            pass # Если картинка не загрузилась, отправим просто текст
+            pass # Если картинка не загрузилась, пробуем отправить текстом
     
     # Отправка текстом
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": 'HTML'}
     return requests.post(url, json=payload, timeout=10).status_code == 200
 
 def main():
@@ -119,37 +119,48 @@ def main():
 
     for feed_url in FEEDS:
         feed = feedparser.parse(feed_url)
-        for entry in feed.entries[:5]:
+        for entry in feed.entries[:10]: # Увеличили до 10, чтобы точно поймать свежие
             link = entry.get('link', '')
             if not link or link in posted:
                 continue
+
+            # === ПРОВЕРКА ДАТЫ (не старше 24 часов) ===
+            published_time = None
+            if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                published_time = datetime(*entry.published_parsed[:6])
+            elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                published_time = datetime(*entry.updated_parsed[:6])
+            
+            if published_time:
+                age = datetime.utcnow() - published_time
+                if age.total_seconds() > 86400: # 86400 секунд = 24 часа
+                    print(f"⏭️ Пропуск (старше 1 дня): {entry.get('title', '')[:40]}")
+                    continue
 
             title = entry.get('title', 'Без заголовка')
             description = ""
             if hasattr(entry, 'summary'): description += entry.summary
             if hasattr(entry, 'description'): description += entry.description
             
-            # 1. Фильтр по ключевым словам
+            # === ПРОВЕРКА НА BLENDER ===
             if not is_blender_news(title, description):
                 print(f"⏭️ Пропуск (не Blender): {title[:40]}")
                 continue
 
-            print(f"✅ Найдено: {title[:50]}")
+            print(f"✅ Найдено свежее: {title[:50]}")
 
-            # 2. Перевод
+            # === ПЕРЕВОД ===
             ru_title = translate_text(title)
-            # Берем только первый абзац или 200 символов для краткости
-            short_desc = description.split('<p>')[0].replace('<br>', '').replace('<p>', '').replace('</p>', '')
+            
+            # Берем только первый абзац для краткости и лучшего перевода
+            short_desc = description.split('<p>')[0].split('<br>')[0]
             ru_desc = translate_text(short_desc)
 
-            # 3. Формируем пост
-            main_link = link
-            post_text = f"<b>{ru_title}</b>\n\n{ru_desc}...\n\n🔗 Источник: {main_link}"
-
-            # 4. Картинка
+            # Формируем пост
+            post_text = f"<b>{ru_title}</b>\n\n{ru_desc}\n\n🔗 Источник: {link}"
             image_url = extract_image(entry)
 
-            # 5. Отправка
+            # === ОТПРАВКА ===
             print("📤 Отправка в Telegram...")
             if send_to_telegram(image_url, post_text):
                 new_posted.append(link)
@@ -159,10 +170,10 @@ def main():
             else:
                 print("❌ Ошибка отправки")
             
-            time.sleep(1) # Пауза, чтобы не спамить запросами
+            time.sleep(1.5) # Пауза, чтобы не блокировали переводчик
 
     print("=" * 50)
-    print("✅ Готово!" if updated else "ℹ️ Новых новостей про Blender нет.")
+    print("✅ Готово!" if updated else "ℹ️ Новых свежих новостей про Blender нет.")
 
 if __name__ == "__main__":
     main()
